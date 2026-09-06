@@ -507,8 +507,9 @@ export class HiveManager {
     return [launcher ? `"${launcher}"` : 'node', `"${script}"`, ...args].join(' ');
   }
 
-  /** Same, but UNQUOTED — preserve the legacy convention for hook configs that
-   *  mangle embedded quotes. Prefer nodeRun() whenever the config can encode it. */
+  /** Same, but UNQUOTED — only for configs or platforms that cannot preserve
+   *  embedded quotes. POSIX JSON hook configs must use nodeRun() because the
+   *  user-selected hive path may legitimately contain spaces. */
   private nodeRunUnquoted(script: string, ...args: string[]): string {
     return [this.nodeLauncher() ?? 'node', script, ...args].join(' ');
   }
@@ -1871,8 +1872,8 @@ export class HiveManager {
    *
    *  Two agy-isms handled: (1) antigravity-cli#49 — agy LOADS hooks from
    *  `~/.gemini/antigravity-cli/hooks.json` but TRIGGERS from `~/.gemini/config/
-   *  hooks.json`, so we write BOTH; (2) commands go to cmd.exe and agy mangles
-   *  embedded quotes, so the shim path must be space-free (hive roots are).
+   *  hooks.json`, so we write BOTH; (2) on Windows commands go to cmd.exe and
+   *  agy mangles embedded quotes, so that platform retains the legacy form.
    *  Runtime-scoped by AGENT_ID (the shim no-ops for non-hive agy sessions), so
    *  this global config never disturbs the user's own `agy` usage. Best-effort,
    *  idempotent (only our own group is overwritten). */
@@ -1883,12 +1884,15 @@ export class HiveManager {
     mkdirSync(join(root, 'bin'), { recursive: true });
     writeFileSync(shim, AGY_HOOK_SHIM, 'utf8');
     // Bundled node, not bare `node` — agy's hooks run with a stripped PATH too.
+    const command = (event: string) => process.platform === 'win32'
+      ? this.nodeRunUnquoted(shim, event)
+      : this.nodeRun(shim, event);
     const tool = (event: string) => ({
       matcher: '*',
-      hooks: [{ type: 'command', command: this.nodeRunUnquoted(shim, event), timeout: 0 }]
+      hooks: [{ type: 'command', command: command(event), timeout: 0 }]
     });
     const plain = (event: string) => ({
-      hooks: [{ type: 'command', command: this.nodeRunUnquoted(shim, event), timeout: 0 }]
+      hooks: [{ type: 'command', command: command(event), timeout: 0 }]
     });
     const group = {
       PreToolUse: [tool('PreToolUse')],
@@ -1931,7 +1935,9 @@ export class HiveManager {
         hooks: [{
           name: `munder-hive-${name}`,
           type: 'command',
-          command: this.nodeRunUnquoted(shim),
+          command: process.platform === 'win32'
+            ? this.nodeRunUnquoted(shim)
+            : this.nodeRun(shim),
           timeout: 30000
         }]
       });
